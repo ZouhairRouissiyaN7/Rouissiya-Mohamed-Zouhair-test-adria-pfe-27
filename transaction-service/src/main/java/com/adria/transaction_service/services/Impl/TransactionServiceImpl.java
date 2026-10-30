@@ -4,6 +4,7 @@ import com.adria.transaction_service.clients.AccountClient;
 import com.adria.transaction_service.config.TransactionProperties;
 import com.adria.transaction_service.dtos.*;
 import com.adria.transaction_service.entities.Transaction;
+import com.adria.transaction_service.events.TransactionCreatedEvent;
 import com.adria.transaction_service.exceptions.*;
 import com.adria.transaction_service.mappers.TransactionMapper;
 import com.adria.transaction_service.repositories.TransactionRepository;
@@ -11,6 +12,7 @@ import com.adria.transaction_service.services.TransactionService;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -32,6 +34,7 @@ public class TransactionServiceImpl implements TransactionService {
         private final TransactionMapper mapper;
         private final AccountClient accountClient;
         private final TransactionProperties properties;
+        private final ApplicationEventPublisher eventPublisher;
 
         @Override
         public TransactionDTO create(CreateTransactionRequest request) {
@@ -60,7 +63,12 @@ public class TransactionServiceImpl implements TransactionService {
                                                 request.amount().negate()),
                                 authorization);
 
-                return mapper.toDTO(transaction);
+                TransactionDTO created = mapper.toDTO(transaction);
+
+                eventPublisher.publishEvent(
+                                TransactionCreatedEvent.from(created));
+
+                return created;
         }
 
         @Override
