@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 @Slf4j
 @Component
@@ -42,8 +44,15 @@ public class AccountClientFallback implements FallbackFactory<AccountClient> {
     }
 
     private RuntimeException failure(
-            Throwable cause,
+            Throwable failure,
             UUID id) {
+
+        Throwable cause = failure;
+
+        while ((cause instanceof ExecutionException || cause instanceof CompletionException)
+                && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
 
         if (cause instanceof FeignException.NotFound) {
             return new BankingException(

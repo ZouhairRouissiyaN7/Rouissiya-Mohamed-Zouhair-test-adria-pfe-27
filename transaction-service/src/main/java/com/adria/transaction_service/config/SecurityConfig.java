@@ -77,6 +77,8 @@ public class SecurityConfig {
                                                                 "/swagger-ui/**",
                                                                 "/swagger-ui.html")
                                                 .permitAll()
+                                                .requestMatchers("/internal/circuit-breakers")
+                                                .permitAll()
                                                 .requestMatchers(
                                                                 "/api/transactions/mcp/**",
                                                                 "/api/transactions/graphiql",
