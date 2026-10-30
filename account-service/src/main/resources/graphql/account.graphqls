@@ -1,0 +1,64 @@
+"""Statut d'un compte bancaire"""
+enum AccountStatus {
+    ACTIVE
+    BLOCKED
+}
+
+"""Compte bancaire"""
+type Account {
+    id: ID!
+    customerReference: String!
+    status: AccountStatus!
+    currency: String!
+    balance: Float!
+}
+
+"""Solde courant d'un compte"""
+type Balance {
+    accountId: ID!
+    currency: String!
+    balance: Float!
+}
+
+"""Résultat d'un virement entre deux comptes"""
+type TransferResult {
+    sourceAccountId: ID!
+    destinationAccountId: ID!
+    amount: Float!
+    sourceBalance: Float!
+    destinationBalance: Float!
+}
+
+"""Données nécessaires à l'ouverture d'un compte"""
+input CreateAccountInput {
+    customerReference: String!
+    currency: String!
+    balance: Float!
+}
+
+"""Données nécessaires à un virement"""
+input TransferInput {
+    sourceAccountId: ID!
+    destinationAccountId: ID!
+    amount: Float!
+}
+
+type Query {
+    """Liste de tous les comptes"""
+    accounts: [Account!]!
+    """Consultation d'un compte par son identifiant"""
+    account(id: ID!): Account!
+    """Consultation du solde d'un compte"""
+    accountBalance(id: ID!): Balance!
+    """Comptes appartenant à un client"""
+    accountsByCustomer(customerReference: String!): [Account!]!
+}
+
+type Mutation {
+    """Ouverture d'un compte"""
+    createAccount(input: CreateAccountInput!): Account!
+    """Blocage ou déblocage d'un compte"""
+    updateAccountStatus(id: ID!, status: AccountStatus!): Account!
+    """Virement d'un compte vers un autre"""
+    transfer(input: TransferInput!): TransferResult!
+}
