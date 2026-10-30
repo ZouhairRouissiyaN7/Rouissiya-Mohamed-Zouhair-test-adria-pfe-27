@@ -1,6 +1,8 @@
 package com.adria.chat_service.mcp;
 
+import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 
 import org.slf4j.Logger;
@@ -8,126 +10,157 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.*;
 
 @Component
 public class McpToolCatalog {
 
-    private static final Logger log = LoggerFactory.getLogger(McpToolCatalog.class);
-
     private static final String HIDDEN_PARAMETER = "bearerToken";
 
-    private final List<McpSyncClient> clients;
-    private final Map<String, McpSchema.Tool> tools = new LinkedHashMap<>();
-    private final Map<String, McpSyncClient> owners = new HashMap<>();
-    private final Set<McpSyncClient> initialized = new HashSet<>();
+    private final McpProperties properties;
 
-    public McpToolCatalog(List<McpSyncClient> clients) {
-        this.clients = clients;
+    public McpToolCatalog(McpProperties properties) {
+        this.properties = properties;
     }
 
-    public synchronized boolean hasTool(String name) {
-        refreshIfEmpty();
-
-        return tools.containsKey(name);
+    public Session open() {
+        return new Session(properties.servers());
     }
 
-    public synchronized String describe() {
-        refreshIfEmpty();
+    public static class Session implements AutoCloseable {
 
-        StringBuilder description = new StringBuilder();
+        private static final Logger log = LoggerFactory.getLogger(Session.class);
 
-        for (McpSchema.Tool tool : tools.values()) {
-            description.append("- ")
-                    .append(tool.name())
-                    .append("(")
-                    .append(parameters(tool))
-                    .append(") : ")
-                    .append(tool.description())
-                    .append("\n");
-        }
+        private final List<McpSyncClient> clients = new ArrayList<>();
+        private final Map<String, McpSchema.Tool> tools = new LinkedHashMap<>();
+        private final Map<String, McpSyncClient> owners = new HashMap<>();
 
-        return description.toString();
-    }
+        Session(List<McpProperties.Server> servers) {
+            for (McpProperties.Server server : servers) {
+                McpSyncClient client = null;
 
-    public synchronized String call(
-            String name,
-            Map<String, Object> arguments,
-            String bearerToken) {
-        refreshIfEmpty();
+                try {
+                    client = McpClient.sync(
+                            HttpClientSseClientTransport.builder(server.url())
+                                    .sseEndpoint(server.sseEndpoint())
+                                    .build())
+                            .requestTimeout(Duration.ofSeconds(30))
+                            .initializationTimeout(Duration.ofSeconds(15))
+                            .build();
 
-        McpSyncClient client = owners.get(name);
-
-        if (client == null) {
-            return "ERREUR : outil inconnu " + name;
-        }
-
-        Map<String, Object> enriched = new HashMap<>(arguments);
-
-        enriched.put(HIDDEN_PARAMETER, bearerToken);
-
-        McpSchema.CallToolResult result = client.callTool(
-                new McpSchema.CallToolRequest(name, enriched));
-
-        StringBuilder text = new StringBuilder();
-
-        for (McpSchema.Content content : result.content()) {
-            if (content instanceof McpSchema.TextContent textContent) {
-                text.append(textContent.text());
-            }
-        }
-
-        return Boolean.TRUE.equals(result.isError())
-                ? "ERREUR : " + text
-                : text.toString();
-    }
-
-    private void refreshIfEmpty() {
-        if (!tools.isEmpty()) {
-            return;
-        }
-
-        for (McpSyncClient client : clients) {
-            try {
-                if (initialized.add(client)) {
                     client.initialize();
-                }
 
-                for (McpSchema.Tool tool : client.listTools().tools()) {
-                    tools.put(tool.name(), tool);
-                    owners.put(tool.name(), client);
-                }
-            } catch (RuntimeException ex) {
-                initialized.remove(client);
+                    for (McpSchema.Tool tool : client.listTools().tools()) {
+                        tools.put(tool.name(), tool);
+                        owners.put(tool.name(), client);
+                    }
 
-                log.warn("Serveur MCP indisponible : {}", ex.toString());
+                    clients.add(client);
+                } catch (RuntimeException ex) {
+                    log.warn("Serveur MCP {} indisponible : {}", server.name(), ex.toString());
+
+                    closeQuietly(client);
+                }
             }
         }
-    }
 
-    @SuppressWarnings("unchecked")
-    private String parameters(McpSchema.Tool tool) {
-        Map<String, Object> properties = tool.inputSchema() == null
-                ? Map.of()
-                : tool.inputSchema().properties();
-
-        List<String> described = new ArrayList<>();
-
-        if (properties == null) {
-            return "";
+        public boolean hasTool(String name) {
+            return tools.containsKey(name);
         }
 
-        properties.forEach((name, definition) -> {
-            if (name.equals(HIDDEN_PARAMETER)) {
+        public String describe() {
+            StringBuilder description = new StringBuilder();
+
+            for (McpSchema.Tool tool : tools.values()) {
+                description.append("- ")
+                        .append(tool.name())
+                        .append("(")
+                        .append(parameters(tool))
+                        .append(") : ")
+                        .append(tool.description())
+                        .append("\n");
+            }
+
+            return description.toString();
+        }
+
+        public String call(
+                String name,
+                Map<String, Object> arguments,
+                String bearerToken) {
+            McpSyncClient client = owners.get(name);
+
+            if (client == null) {
+                return "ERREUR : outil inconnu " + name;
+            }
+
+            Map<String, Object> enriched = new HashMap<>(arguments);
+
+            enriched.put(HIDDEN_PARAMETER, bearerToken);
+
+            try {
+                McpSchema.CallToolResult result = client.callTool(
+                        new McpSchema.CallToolRequest(name, enriched));
+
+                StringBuilder text = new StringBuilder();
+
+                for (McpSchema.Content content : result.content()) {
+                    if (content instanceof McpSchema.TextContent textContent) {
+                        text.append(textContent.text());
+                    }
+                }
+
+                return Boolean.TRUE.equals(result.isError())
+                        ? "ERREUR : " + text
+                        : text.toString();
+            } catch (RuntimeException ex) {
+                log.warn("Appel de l'outil {} impossible : {}", name, ex.toString());
+
+                return "ERREUR : l'outil " + name + " est temporairement indisponible";
+            }
+        }
+
+        @Override
+        public void close() {
+            clients.forEach(Session::closeQuietly);
+        }
+
+        private static void closeQuietly(McpSyncClient client) {
+            if (client == null) {
                 return;
             }
 
-            Map<String, Object> details = (Map<String, Object>) definition;
+            try {
+                client.closeGracefully();
+            } catch (RuntimeException ignored) {
+            }
+        }
 
-            described.add(name + ": " + details.getOrDefault("type", "string")
-                    + " (" + details.getOrDefault("description", "") + ")");
-        });
+        @SuppressWarnings("unchecked")
+        private String parameters(McpSchema.Tool tool) {
+            Map<String, Object> properties = tool.inputSchema() == null
+                    ? null
+                    : tool.inputSchema().properties();
 
-        return String.join(", ", described);
+            if (properties == null) {
+                return "";
+            }
+
+            List<String> described = new ArrayList<>();
+
+            properties.forEach((name, definition) -> {
+                if (name.equals(HIDDEN_PARAMETER)) {
+                    return;
+                }
+
+                Map<String, Object> details = (Map<String, Object>) definition;
+
+                described.add(name + ": " + details.getOrDefault("type", "string")
+                        + " (" + details.getOrDefault("description", "") + ")");
+            });
+
+            return String.join(", ", described);
+        }
     }
 }

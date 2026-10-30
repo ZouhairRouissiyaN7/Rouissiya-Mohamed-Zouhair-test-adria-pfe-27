@@ -26,6 +26,8 @@ import java.util.Set;
 @Service
 public class ChatService {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+
     private static final String SYSTEM_PROMPT = """
             Tu es l'assistant virtuel de la banque ADRIA. Tu automatises les opérations bancaires
             de l'utilisateur en utilisant les outils suivants :
@@ -59,8 +61,6 @@ public class ChatService {
             - Réponds toujours en français, de façon concise.
             """;
 
-    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-
     private final ChatClient chatClient;
     private final McpToolCatalog catalog;
     private final ObjectMapper mapper;
@@ -81,62 +81,63 @@ public class ChatService {
             String message,
             String bearerToken) {
 
-        String system = SYSTEM_PROMPT.formatted(catalog.describe());
+        try (McpToolCatalog.Session session = catalog.open()) {
 
-        List<Message> messages = new ArrayList<>();
+            String system = SYSTEM_PROMPT.formatted(session.describe());
 
-        messages.add(new UserMessage(message));
+            List<Message> messages = new ArrayList<>();
 
-        StringBuilder known = new StringBuilder(message);
+            messages.add(new UserMessage(message));
 
-        String lastReply = null;
+            StringBuilder known = new StringBuilder(message);
 
-        for (int step = 0; step < maxSteps; step++) {
+            for (int step = 0; step < maxSteps; step++) {
 
-            lastReply = chatClient.prompt()
-                    .system(system)
-                    .messages(messages)
-                    .call()
-                    .content();
+                String reply = chatClient.prompt()
+                        .system(system)
+                        .messages(messages)
+                        .call()
+                        .content();
 
-            JsonNode node = parse(lastReply);
+                JsonNode node = parse(reply);
 
-            if (node == null || !"tool".equals(node.path("action").asText())) {
-                log.info("Étape {} : réponse finale", step + 1);
+                if (node == null || !"tool".equals(node.path("action").asText())) {
+                    log.info("Étape {} : réponse finale", step + 1);
 
-                return new ChatResponse(answer(node, lastReply));
+                    return new ChatResponse(answer(node, reply));
+                }
+
+                String tool = node.path("tool").asText();
+
+                log.info("Étape {} : appel de l'outil {} avec {}", step + 1, tool, node.path("arguments"));
+
+                Map<String, Object> arguments = arguments(node);
+
+                String unknownIdentifier = unknownIdentifier(arguments, known);
+
+                String result;
+
+                if (!session.hasTool(tool)) {
+                    result = "ERREUR : outil inconnu " + tool;
+                } else if (unknownIdentifier != null) {
+                    result = "ERREUR : l'identifiant " + unknownIdentifier
+                            + " ne figure pas dans la conversation. Recopie exactement l'identifiant fourni par l'utilisateur.";
+                } else {
+                    result = session.call(tool, arguments, bearerToken);
+                }
+
+                known.append('\n').append(result);
+
+                log.info("Étape {} : résultat de {} = {}", step + 1, tool, result);
+
+                String instruction = unknownIdentifier != null
+                        ? "\nRecopie l'identifiant EXACTEMENT comme dans le message de l'utilisateur et rappelle l'outil avec l'action tool."
+                        : "\nRéponds maintenant avec l'action answer, ou appelle un autre outil si nécessaire.";
+
+                messages.add(new AssistantMessage(reply));
+                messages.add(new UserMessage(
+                        "Résultat de l'outil " + tool + " : " + result + instruction));
             }
-
-            String tool = node.path("tool").asText();
-
-            log.info("Étape {} : appel de l'outil {} avec {}", step + 1, tool, node.path("arguments"));
-
-            Map<String, Object> arguments = arguments(node);
-
-            String unknownIdentifier = unknownIdentifier(arguments, known);
-
-            String result;
-
-            if (!catalog.hasTool(tool)) {
-                result = "ERREUR : outil inconnu " + tool;
-            } else if (unknownIdentifier != null) {
-                result = "ERREUR : l'identifiant " + unknownIdentifier
-                        + " ne figure pas dans la conversation. Recopie exactement l'identifiant fourni par l'utilisateur.";
-            } else {
-                result = catalog.call(tool, arguments, bearerToken);
-            }
-
-            known.append('\n').append(result);
-
-            log.info("Étape {} : résultat de {} = {}", step + 1, tool, result);
-
-            String instruction = unknownIdentifier != null
-                    ? "\nRecopie l'identifiant EXACTEMENT comme dans le message de l'utilisateur et rappelle l'outil avec l'action tool."
-                    : "\nRéponds maintenant avec l'action answer, ou appelle un autre outil si nécessaire.";
-
-            messages.add(new AssistantMessage(lastReply));
-            messages.add(new UserMessage(
-                    "Résultat de l'outil " + tool + " : " + result + instruction));
         }
 
         return new ChatResponse(

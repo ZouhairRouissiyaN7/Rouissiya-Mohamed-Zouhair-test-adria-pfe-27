@@ -9,7 +9,7 @@ x-service-environment: &service-environment
   DB_USER: ${DB_USER:-adria}
   DB_PASSWORD: ${DB_PASSWORD:-adria}
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-  JAVA_TOOL_OPTIONS: -Xmx384m
+  JAVA_TOOL_OPTIONS: -Xmx384m -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
 
 services:
   mysql:
@@ -76,7 +76,7 @@ services:
     ports:
       - "8761:8761"
     environment:
-      JAVA_TOOL_OPTIONS: -Xmx256m
+      JAVA_TOOL_OPTIONS: -Xmx256m -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8761/actuator/health > /dev/null"]
       interval: 10s
@@ -91,7 +91,7 @@ services:
       - "9999:9999"
     environment:
       EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-service:8761/eureka/
-      JAVA_TOOL_OPTIONS: -Xmx256m
+      JAVA_TOOL_OPTIONS: -Xmx256m -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8
     volumes:
       - ./config-repo:/config-repo:ro
     depends_on:
